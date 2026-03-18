@@ -1,5 +1,8 @@
 #include "DataLogger.h"
 
+// USE IP INSTEAD OF DOMAIN TO FIX ERROR 601
+String THINGSPEAK_IP = "http://184.106.153.149"; 
+
 DataLogger::DataLogger(int csPin) {
     _csPin = csPin;
     _fileName = "/datalog.txt";
@@ -7,6 +10,7 @@ DataLogger::DataLogger(int csPin) {
 }
 
 void DataLogger::begin() {
+    // Initialize SPI before SD (ensure pins are correct for your board)
     if (!SD.begin(_csPin)) {
         Serial.println("SD Card Mount Failed");
         return;
@@ -15,9 +19,8 @@ void DataLogger::begin() {
 }
 
 void DataLogger::logSensorData(String timestamp, SensorData data) {
-    // 1. Construct the String with Identifiers
-    // Format: "Time:..., Press:..., Temp:...,"
     String dataStr = "";
+    // Note: Ensure your sensor code handles failures so these aren't all "0"
     dataStr += "Time:" + timestamp + ",";
     dataStr += "Press:" + String(data.airPressure, 2) + ",";
     dataStr += "Alt:" + String(data.altitude, 2) + ",";
@@ -28,36 +31,31 @@ void DataLogger::logSensorData(String timestamp, SensorData data) {
     dataStr += "Rain:" + String(data.rainCount) + ",";
     dataStr += "WSpd:" + String(data.windSpeed, 2) + ",";
     dataStr += "WDir:" + String(data.windDirection) + ",";
-    // Power
     dataStr += "V33:" + String(data.volt_3v3, 2) + ",";
     dataStr += "V5:" + String(data.volt_5v, 2) + ",";
     dataStr += "VBatt:" + String(data.volt_batt, 2) + ",";
     dataStr += "VSol:" + String(data.volt_solar, 2) + ",";
     dataStr += "VDC:" + String(data.volt_dc, 2);
 
-    // 2. Write to SD
     File file = SD.open(_fileName, FILE_APPEND);
     if (file) {
         file.println(dataStr);
         file.close();
-        Serial.println("Data Logged to SD: " + dataStr);
-        
-        // 3. Update the internal cache for the GSM function
+        Serial.println("Logged: " + dataStr);
         _lastDataString = dataStr; 
     } else {
         Serial.println("Error writing to SD");
     }
 }
 
-// Helper to find "Label:Value," and return Value
 String DataLogger::getValueFromLog(String logLine, String label) {
     String searchKey = label + ":";
     int startIndex = logLine.indexOf(searchKey);
-    if (startIndex == -1) return "0"; // Not found
+    if (startIndex == -1) return "0"; 
     
     startIndex += searchKey.length();
     int endIndex = logLine.indexOf(",", startIndex);
-    if (endIndex == -1) endIndex = logLine.length(); // End of line case
+    if (endIndex == -1) endIndex = logLine.length(); 
     
     return logLine.substring(startIndex, endIndex);
 }
@@ -68,11 +66,10 @@ void DataLogger::uploadLastDataToThingspeak(GSM &gsmModule) {
         return;
     }
 
-    Serial.println("Deconstructing Log String for Upload...");
+    Serial.println("Starting Upload Sequence (Approx 45 seconds)...");
 
-    // CHANNEL 1: Weather (8 Fields max)
-    // Field 1: Temp, 2: Hum, 3: Press, 4: Rain, 5: WindSpd, 6: WindDir, 7: Light, 8: SoilM
-    String url1 = "http://api.thingspeak.com/update?api_key=" + API_KEY_1;
+    // CHANNEL 1
+    String url1 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_1;
     url1 += "&field1=" + getValueFromLog(_lastDataString, "Temp");
     url1 += "&field2=" + getValueFromLog(_lastDataString, "Hum");
     url1 += "&field3=" + getValueFromLog(_lastDataString, "Press");
@@ -83,19 +80,23 @@ void DataLogger::uploadLastDataToThingspeak(GSM &gsmModule) {
     url1 += "&field8=" + getValueFromLog(_lastDataString, "SoilM");
 
     gsmModule.sendThingSpeakRequest(url1);
-    delay(2000); // Small pause between requests
+    
+    Serial.println("Waiting 16s for ThingSpeak Rate Limit...");
+    delay(16000); // CRITICAL: ThingSpeak blocks if < 15s
 
-    // CHANNEL 2: Power Rails A (Voltage 3.3, 5, Battery)
-    String url2 = "http://api.thingspeak.com/update?api_key=" + API_KEY_2;
+    // CHANNEL 2
+    String url2 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_2;
     url2 += "&field1=" + getValueFromLog(_lastDataString, "V33");
     url2 += "&field2=" + getValueFromLog(_lastDataString, "V5");
     url2 += "&field3=" + getValueFromLog(_lastDataString, "VBatt");
     
     gsmModule.sendThingSpeakRequest(url2);
-    delay(2000);
 
-    // CHANNEL 3: Power Rails B (Solar, DC In, Altitude)
-    String url3 = "http://api.thingspeak.com/update?api_key=" + API_KEY_3;
+    Serial.println("Waiting 16s for ThingSpeak Rate Limit...");
+    delay(16000); // CRITICAL: ThingSpeak blocks if < 15s
+
+    // CHANNEL 3
+    String url3 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_3;
     url3 += "&field1=" + getValueFromLog(_lastDataString, "VSol");
     url3 += "&field2=" + getValueFromLog(_lastDataString, "VDC");
     url3 += "&field3=" + getValueFromLog(_lastDataString, "Alt");

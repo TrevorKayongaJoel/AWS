@@ -2567,6 +2567,156 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Device:D_Zener_Filled"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 1.016)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "D"
+				(at 0 2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "D_Zener_Filled"
+				(at 0 -2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Zener diode, filled shape"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "diode"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_fp_filters" "TO-???* *_Diode_* *SingleDiode* D_*"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "D_Zener_Filled_0_1"
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy -1.27 1.27) (xy -0.762 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy -1.27 0)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 -1.27) (xy 1.27 1.27) (xy -1.27 0) (xy 1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type outline)
+					)
+				)
+			)
+			(symbol "D_Zener_Filled_1_1"
+				(pin passive line
+					(at -3.81 0 0)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 3.81 0 180)
+					(length 2.54)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:L"
 			(pin_numbers
 				(hide yes)
@@ -7390,10 +7540,30 @@
 		)
 		(uuid "f7a033dc-81fa-42f6-a8df-643bcc612bcd")
 	)
-	(text_box "circuit set to automatic switching btn both inputs.\nsee datasheets for manual switching"
+	(text_box "current limit set using formular\nIlm = (65.2/(Rlm^0.861))\n\nfor 4A ==> Rilm = 25.578k"
 		(exclude_from_sim no)
-		(at 107.95 289.56 0)
-		(size 62.23 20.32)
+		(at 109.22 279.4 0)
+		(size 29.21 13.97)
+		(margins 0.9525 0.9525 0.9525 0.9525)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill
+			(type none)
+		)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "14b0c9e3-1ed5-4b01-aa64-a14d58468938")
+	)
+	(text_box "circuit set to automatic switching btn both inputs.\nsee datasheets for manual switching\n\n"
+		(exclude_from_sim no)
+		(at 143.51 289.56 0)
+		(size 26.67 20.32)
 		(margins 0.9525 0.9525 0.9525 0.9525)
 		(stroke
 			(width 0)
@@ -12912,7 +13082,7 @@
 				)
 			)
 		)
-		(property "Value" "23.7k"
+		(property "Value" "2.5k"
 			(at 73.152 240.284 0)
 			(effects
 				(font
@@ -15087,7 +15257,7 @@
 				)
 			)
 		)
-		(property "Value" "5k"
+		(property "Value" "25k"
 			(at 73.152 289.814 0)
 			(effects
 				(font
@@ -16685,7 +16855,7 @@
 				)
 			)
 		)
-		(property "Value" "5k"
+		(property "Value" "25k"
 			(at 73.152 250.444 0)
 			(effects
 				(font
@@ -17444,7 +17614,7 @@
 				)
 			)
 		)
-		(property "Value" "51.1K"
+		(property "Value" "25.5k"
 			(at 109.982 277.114 0)
 			(effects
 				(font
@@ -26759,7 +26929,7 @@
 				)
 			)
 		)
-		(property "Value" "23.7k"
+		(property "Value" "2.5k"
 			(at 73.152 279.654 0)
 			(effects
 				(font
@@ -27207,6 +27377,74 @@
 			(project "AWS PROJECT"
 				(path "/28dd5718-f0db-4cd1-9b2d-c2f5533a75a3/4ecbf471-21e7-4b8d-82a4-6ddc1c8d89c4"
 					(reference "C42")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Zener_Filled")
+		(at 55.88 251.46 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e1a15ed5-dd88-402e-9eec-9d2cc22852c0")
+		(property "Reference" "D26"
+			(at 55.88 245.11 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "22v"
+			(at 55.88 247.65 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 55.88 251.46 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 55.88 251.46 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Zener diode, filled shape"
+			(at 55.88 251.46 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "802c02ee-2ff2-46af-9689-07679d645aa4")
+		)
+		(pin "1"
+			(uuid "a97f1b04-1946-4e37-afa8-658ed73938c7")
+		)
+		(instances
+			(project ""
+				(path "/28dd5718-f0db-4cd1-9b2d-c2f5533a75a3/4ecbf471-21e7-4b8d-82a4-6ddc1c8d89c4"
+					(reference "D26")
 					(unit 1)
 				)
 			)
@@ -29819,7 +30057,6 @@
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "ff60d0f4-b268-4000-8ec7-763cf59fe943")
 		(property "Reference" "#PWR0111"
 			(at 138.43 281.94 0)
@@ -29831,7 +30068,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 138.43 280.67 0)
+			(at 141.732 277.622 0)
 			(effects
 				(font
 					(size 1.27 1.27)

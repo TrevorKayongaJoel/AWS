@@ -1,7 +1,6 @@
 #include "GSM.h"
 
 // ESP32 WROVER: Use 26/27 or 4/13. DO NOT use 16/17 if using PSRAM.
-// Assuming Standard ESP32 here based on your previous code.
 #define RX_GSM 16 
 #define TX_GSM 17
 
@@ -33,32 +32,49 @@ void GSM::setupGSM() {
     if(gsmReady) {
         connectGPRS();
     } else {
-        Serial.println("GSM Failure.");
+        Serial.println("GSM Failure (Check Wiring/Power).");
     }
 }
 
 void GSM::connectGPRS() {
-    Serial.println("Connecting to GPRS...");
+    Serial.println("Configuring GPRS...");
+    
+    // 1. CLEAN UP START: Close previous connections to stop "ERROR"
+    sendCommand("AT+HTTPTERM", 500, true); // Close HTTP if open
+    sendCommand("AT+SAPBR=0,1", 500, true); // Close Bearer if open
+
+    // 2. Start Connection
     sendCommand("AT+SAPBR=3,1,\"Contype\",\"GPRS\"", 1000, true);
-    // Replace 'internet' with your APN if different (e.g., "mtn", "airtel")
     sendCommand("AT+SAPBR=3,1,\"APN\",\"internet\"", 1000, true); 
     sendCommand("AT+SAPBR=1,1", 3000, true); // Enable GPRS
-    sendCommand("AT+SAPBR=2,1", 3000, true); // Check IP
-    sendCommand("AT+HTTPINIT", 1000, true);  // Init HTTP
+    
+    // 3. Verify IP
+    sendCommand("AT+SAPBR=2,1", 3000, true); 
+    
+    // 4. Initialize HTTP Service once
+    sendCommand("AT+HTTPINIT", 1000, true);  
 }
 
 void GSM::sendThingSpeakRequest(String url) {
-    // 1. Set URL
-    Serial.println("Uploading to ThingSpeak...");
+    // Terminate any stuck previous sessions just in case
+    sendCommand("AT+HTTPTERM", 500, false);
+    sendCommand("AT+HTTPINIT", 500, false);
+
+    Serial.println("Uploading: " + url);
+    
+    // Set URL
     String cmd = "AT+HTTPPARA=\"URL\",\"" + url + "\"";
     sendCommand(cmd, 2000, false);
 
-    // 2. GET Request (Action 0)
-    sendCommand("AT+HTTPACTION=0", 5000, true);
+    // GET Request (Action 0)
+    // We wait longer (8000ms) because network can be slow
+    sendCommand("AT+HTTPACTION=0", 8000, true);
 
-    // 3. Read Response (Optional, just checking status)
-    // You can add logic here to check for "200 OK"
+    // Read Response to see if it worked
     sendCommand("AT+HTTPREAD", 2000, true);
+    
+    // Close this specific HTTP session to prevent memory leaks in modem
+    sendCommand("AT+HTTPTERM", 500, false); 
 }
 
 void GSM::sendCommand(const String& command, int timeout, boolean debug) {
