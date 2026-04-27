@@ -35,7 +35,9 @@ void DataLogger::logSensorData(String timestamp, SensorData data) {
     dataStr += "V5:" + String(data.volt_5v, 2) + ",";
     dataStr += "VBatt:" + String(data.volt_batt, 2) + ",";
     dataStr += "VSol:" + String(data.volt_solar, 2) + ",";
-    dataStr += "VDC:" + String(data.volt_dc, 2);
+    dataStr += "VDC:" + String(data.volt_dc, 2) + ",";
+    dataStr += "CBatt:" + String(data.curr_batt, 2) + ",";
+    dataStr += "CSol:" + String(data.curr_solar, 2);
 
     File file = SD.open(_fileName, FILE_APPEND);
     if (file) {
@@ -84,22 +86,23 @@ void DataLogger::uploadLastDataToThingspeak(GSM &gsmModule) {
     Serial.println("Waiting 16s for ThingSpeak Rate Limit...");
     delay(16000); // CRITICAL: ThingSpeak blocks if < 15s
 
-    // CHANNEL 2
+    // CHANNEL 2 (Voltage)
     String url2 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_2;
     url2 += "&field1=" + getValueFromLog(_lastDataString, "V33");
     url2 += "&field2=" + getValueFromLog(_lastDataString, "V5");
     url2 += "&field3=" + getValueFromLog(_lastDataString, "VBatt");
+    url2 += "&field4=" + getValueFromLog(_lastDataString, "VSol");
+    url2 += "&field5=" + getValueFromLog(_lastDataString, "VDC");
     
     gsmModule.sendThingSpeakRequest(url2);
 
     Serial.println("Waiting 16s for ThingSpeak Rate Limit...");
     delay(16000); // CRITICAL: ThingSpeak blocks if < 15s
 
-    // CHANNEL 3
+    // CHANNEL 3 (Current)
     String url3 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_3;
-    url3 += "&field1=" + getValueFromLog(_lastDataString, "VSol");
-    url3 += "&field2=" + getValueFromLog(_lastDataString, "VDC");
-    url3 += "&field3=" + getValueFromLog(_lastDataString, "Alt");
+    url3 += "&field1=" + getValueFromLog(_lastDataString, "CBatt");
+    url3 += "&field2=" + getValueFromLog(_lastDataString, "CSol");
 
     gsmModule.sendThingSpeakRequest(url3);
     Serial.println("All channels updated.");

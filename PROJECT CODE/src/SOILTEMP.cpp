@@ -13,7 +13,7 @@ DallasTemperature sensors(&oneWire);
 SoilTemp::SoilTemp() : soil_temperature_(0.0) {}    
 
 void SoilTemp::sensor_setup() {
-    Serial.begin(9600);
+    // Serial.begin(9600); // REMOVED: Serial already initialized in main.cpp
     // Setup code for the soil temperature sensor
     sensors.begin();
     

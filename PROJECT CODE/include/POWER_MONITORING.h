@@ -13,6 +13,8 @@ struct VoltageData {
     float v3; // Battery
     float v4; // Solar
     float v5; // DC In
+    float v6; // Battery current (ACS712)
+    float v7; // Solar current (ACS712)
 };
 
 class PowerMonitoring {

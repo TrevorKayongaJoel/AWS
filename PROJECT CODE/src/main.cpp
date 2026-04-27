@@ -84,6 +84,8 @@ void loop() {
         currentData.volt_batt = v.v3;
         currentData.volt_solar = v.v4;
         currentData.volt_dc = v.v5;
+        currentData.curr_batt = v.v6;
+        currentData.curr_solar = v.v7;
     } else {
         // Init to 0 if fails
         currentData.volt_3v3 = 0.0;
@@ -91,6 +93,8 @@ void loop() {
         currentData.volt_batt = 0.0;
         currentData.volt_solar = 0.0;
         currentData.volt_dc = 0.0;
+        currentData.curr_batt = 0.0;
+        currentData.curr_solar = 0.0;
     }
 
     // 3. Other Sensors (Add basic checks if your libraries support it)

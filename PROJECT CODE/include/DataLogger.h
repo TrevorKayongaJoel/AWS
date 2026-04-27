@@ -27,9 +27,9 @@ private:
     String getValueFromLog(String logLine, String label);
     
     // ThingSpeak Config (Update these)
-    const String API_KEY_1 = "WL5ALGBAQDZV674Z"; 
-    const String API_KEY_2 = "IKCHAI6ID958MEYG";
-    const String API_KEY_3 = "IBK1KTD4E6A0CKZK";
+    const String API_KEY_1 = "0UOU523VQPM2FZXJ"; 
+    const String API_KEY_2 = "5N37KH8M7FCF5PU2";
+    const String API_KEY_3 = "XH83XCG9LMURW45L";
 };
 
 #endif

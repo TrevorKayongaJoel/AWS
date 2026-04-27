@@ -16,7 +16,7 @@ DHTSensor::DHTSensor() : pin_(DHTPIN), temperature_(0.0), humidity_(0.0) {
 }
 
 void DHTSensor::getsensor() {
-    Serial.begin(9600);
+    // Serial.begin(9600); // REMOVED: Serial already initialized in main.cpp
     
     dht.begin();
   

@@ -13,12 +13,14 @@ struct SensorData {
     float windSpeed = 0.0;
     int windDirection = 0;
     
-    // Power Monitoring (5 rails + Battery + Solar)
+    // Power Monitoring (5 rails + Battery + Solar + Currents)
     float volt_3v3 = 0.0;
     float volt_5v = 0.0;
     float volt_batt = 0.0;
     float volt_solar = 0.0;
     float volt_dc = 0.0;
+    float curr_batt = 0.0; // Battery current
+    float curr_solar = 0.0; // Solar current
 };
 
 #endif

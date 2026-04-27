@@ -4,7 +4,7 @@
 // Constructor
 PowerMonitoring::PowerMonitoring() {
   _slaveAddress = POWER_BOARD_ADDR;
-  _payloadSize = sizeof(VoltageData); // 20 bytes
+  _payloadSize = sizeof(VoltageData); // 28 bytes (7 floats)
 }
 
 // Setup I2C

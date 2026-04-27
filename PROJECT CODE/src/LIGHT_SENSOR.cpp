@@ -5,7 +5,7 @@
 LightSensor::LightSensor() : _pin(ANALOG_PIN) {}
 
 float LightSensor::readLightLevel() {
-    Serial.begin(9600);
+    // Serial.begin(9600); // REMOVED: Serial already initialized in main.cpp
     int adc = analogRead(_pin);
     light_voltage_ = (adc/4095.0) * 3.3; // Convert ADC value to voltage
     delay(100); // brief delay to ensure sensor stability
