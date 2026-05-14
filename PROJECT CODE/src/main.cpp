@@ -2,18 +2,19 @@
  * main.cpp — Multi-Level Fixed Duty Cycling Implementation
  * =========================================================
  * Strategy (from design document):
+ *   UPDATE_INTERVAL_MINUTES = 30 minutes (total cycle time)
  *   TON  = 2 minutes  (active window: sensors + log + transmit)
- *   TOFF = 28 minutes (deep sleep)
- *   D(k) = TON / (TON + TOFF) = 2/30 = 0.067 (6.7% active)
+ *   TOFF = (UPDATE_INTERVAL_MINUTES - 2) minutes (deep sleep)
+ *   D(k) = TON / (TON + TOFF) = 2/UPDATE_INTERVAL_MINUTES (6.7% active for 30min cycle)
  *
  * Per-module duty cycling:
  *   ESP32   — deep sleep during TOFF (10-150µA via esp_deep_sleep_start())
  *   GSM     — MOSFET power gate on GPIO 32; ON only during TX, OFF immediately after
- *             D_GSM = 20s/1800s = 0.0111 → Pavg ≈ 11.2mW vs 2W continuous (~180x reduction)
+ *             D_GSM = 20s / (UPDATE_INTERVAL_MINUTES * 60)s → Pavg ≈ 11.2mW vs 2W continuous (~180x reduction)
  *   LoRa    — AT+LOWPOWER command over UART; wakes automatically on next UART byte
  *             RA-08H deep sleep current: 0.9µA (confirmed from datasheet)
- *   Sensors — read only during active window (~2s active per 1800s period)
- *             D_sensor = 2/1800 = 0.0011 → Pavg ≈ 5.03mW vs 120mW continuous (24x reduction)
+ *   Sensors — read only during active window (~2s active per UPDATE_INTERVAL_MINUTES * 60s period)
+ *             D_sensor = 2 / (UPDATE_INTERVAL_MINUTES * 60) → Pavg ≈ 5.03mW vs 120mW continuous (24x reduction for 30min cycle)
  *   SD card — SPI disabled immediately after write (batched logging)
  *   RTC     — always ON; maintains time during deep sleep, triggers wake
  *
@@ -54,12 +55,14 @@
 // =========================================================
 // FIXED DUTY CYCLING PARAMETERS
 // =========================================================
+// UPDATE_INTERVAL_MINUTES = total cycle time (e.g., 30 minutes)
 // TON  = 2 min  → active window (sensors + log + TX)
-// TOFF = 28 min → deep sleep window
-// D(k) = TON / (TON + TOFF) = 120s / 1800s = 0.067
+// TOFF = (UPDATE_INTERVAL_MINUTES - 2) min → deep sleep window
+// D(k) = TON / (TON + TOFF) = 2 / UPDATE_INTERVAL_MINUTES
 
+static const uint32_t UPDATE_INTERVAL_MINUTES = 30;  // Total cycle time in minutes
 static const uint64_t TON_MS  = 2ULL  * 60ULL * 1000ULL;    // 2 min in ms
-static const uint64_t TOFF_US = 28ULL * 60ULL * 1000000ULL; // 28 min in µs (deep sleep API)
+static const uint64_t TOFF_US = (UPDATE_INTERVAL_MINUTES - 2ULL) * 60ULL * 1000000ULL; // TOFF in µs (deep sleep API)
 
 // =========================================================
 // GSM MOSFET POWER GATE PIN
@@ -137,7 +140,7 @@ void gsmPowerOn() {
 // =========================================================
 // GSM POWER GATE — OFF
 // De-energise MOSFET immediately after TX.
-// D_GSM = 20s / 1800s = 0.0111 → Pavg ≈ 11.2mW (~180x reduction vs 2W continuous)
+// D_GSM = 20s / (UPDATE_INTERVAL_MINUTES * 60)s → Pavg ≈ 11.2mW (~180x reduction vs 2W continuous)
 // =========================================================
 void gsmPowerOff() {
     Serial.println("[DC] GSM Power Gate: OFF");
@@ -206,8 +209,8 @@ void enterDeepSleep() {
 
 // =========================================================
 // PHASE 1: READ ALL SENSORS
-// D_sensor = 2s / 1800s = 0.0011
-// Pavg = 0.0011*120mW + 0.9989*5mW ≈ 5.03mW  (24x reduction)
+// D_sensor = 2s / (UPDATE_INTERVAL_MINUTES * 60)s
+// Pavg = D_sensor*120mW + (1 - D_sensor)*5mW ≈ 5.03mW (24x reduction for 30min cycle)
 // =========================================================
 SensorData readAllSensors() {
     SensorData data;
@@ -338,7 +341,7 @@ void setup() {
     }
 
     float D = (float)TON_MS / ((float)TON_MS + (float)(TOFF_US / 1000ULL));
-    Serial.printf("[DC] TON=2min | TOFF=28min | D=%.3f (%.1f%% active)\n", D, D * 100.0f);
+    Serial.printf("[DC] TON=2min | TOFF=%umin | D=%.3f (%.1f%% active)\n", UPDATE_INTERVAL_MINUTES - 2, D, D * 100.0f);
 
     // GSM MOSFET gate — LOW (OFF) at boot
     pinMode(GSM_POWER_PIN, OUTPUT);
@@ -369,7 +372,7 @@ void setup() {
     // =====================================================
     //  ACTIVE WINDOW  (TON = 2 minutes)
     //  All processing happens here. After this block, the
-    //  ESP32 enters deep sleep for TOFF (28 minutes).
+    //  ESP32 enters deep sleep for TOFF ((UPDATE_INTERVAL_MINUTES - 2) minutes).
     // =====================================================
     unsigned long tonStart = millis();
     Serial.printf("[DC] Active window open (TON = %llu ms)\n", TON_MS);
@@ -381,7 +384,7 @@ void setup() {
     Serial.printf("[DC] Active window closed. Elapsed: %lu ms\n", millis() - tonStart);
 
     // =====================================================
-    //  SLEEP PHASE  (TOFF = 28 minutes)
+    //  SLEEP PHASE  (TOFF = (UPDATE_INTERVAL_MINUTES - 2) minutes)
     //  State at entry:
     //    GSM:  OFF  (gsmPowerOff() called in transmitData)
     //    LoRa: SLEEP 0.9µA (AT+LOWPOWER sent in transmitData)
