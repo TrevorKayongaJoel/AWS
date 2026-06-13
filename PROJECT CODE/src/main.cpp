@@ -60,7 +60,7 @@
 // TOFF = (UPDATE_INTERVAL_MINUTES - 2) min → deep sleep window
 // D(k) = TON / (TON + TOFF) = 2 / UPDATE_INTERVAL_MINUTES
 
-static const uint32_t UPDATE_INTERVAL_MINUTES = 30;  // Total cycle time in minutes
+static const uint32_t UPDATE_INTERVAL_MINUTES = 10;  // Total cycle time in minutes
 static const uint64_t TON_MS  = 2ULL  * 60ULL * 1000ULL;    // 2 min in ms
 static const uint64_t TOFF_US = (UPDATE_INTERVAL_MINUTES - 2ULL) * 60ULL * 1000000ULL; // TOFF in µs (deep sleep API)
 

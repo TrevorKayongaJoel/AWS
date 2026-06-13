@@ -1,5 +1,5 @@
 #include "GSM.h"
-
+#include <SD.h>
 // ESP32 WROVER: Use 26/27 or 4/13. DO NOT use 16/17 if using PSRAM.
 #define RX_GSM 16 
 #define TX_GSM 17
@@ -13,7 +13,7 @@ void GSM::setupGSM() {
     delay(1000);
     Serial.println("Initializing GSM...");
 
-    // Handshake
+    // Handshake (log responses for debugging)
     bool gsmReady = false;
     int attempts = 0;
     while (!gsmReady && attempts < 10) {
@@ -21,6 +21,14 @@ void GSM::setupGSM() {
         delay(500);
         if (SerialG.available()) {
             String response = SerialG.readString();
+            // Log the response to SD for later analysis
+            if (SD.begin()) {
+                File f = SD.open("/gsm_debug.txt", FILE_APPEND);
+                if (f) {
+                    f.print(String(millis())); f.print(",SETUP_AT_RESP,"); f.println(response);
+                    f.close();
+                }
+            }
             if (response.indexOf("OK") != -1) {
                 gsmReady = true;
                 Serial.println("GSM Ready.");
@@ -61,6 +69,14 @@ void GSM::sendThingSpeakRequest(String url) {
     sendCommand("AT+HTTPINIT", 500, false);
 
     Serial.println("Uploading: " + url);
+    // Log the URL we are attempting to upload
+    if (SD.begin()) {
+        File f = SD.open("/gsm_debug.txt", FILE_APPEND);
+        if (f) {
+            f.print(String(millis())); f.print(",UPLOAD_URL,"); f.println(url);
+            f.close();
+        }
+    }
     
     // Set URL
     String cmd = "AT+HTTPPARA=\"URL\",\"" + url + "\"";
@@ -79,14 +95,35 @@ void GSM::sendThingSpeakRequest(String url) {
 
 void GSM::sendCommand(const String& command, int timeout, boolean debug) {
     while(SerialG.available()) SerialG.read(); // Clear buffer
+    // Send command and capture response
     SerialG.println(command);
-    
+
+    // Log the command to SD for debugging
+    if (SD.begin()) {
+        File f = SD.open("/gsm_debug.txt", FILE_APPEND);
+        if (f) {
+            f.print(String(millis())); f.print(",CMD,"); f.println(command);
+            f.close();
+        }
+    }
+
+    String resp = "";
     long int time = millis();
     while((time + timeout) > millis()) {
         while(SerialG.available()) {
             char c = SerialG.read();
+            resp += c;
             if(debug) Serial.write(c);
         }
     }
     if(debug) Serial.println();
+
+    // Persist response to SD for post-mortem
+    if (SD.begin()) {
+        File f = SD.open("/gsm_debug.txt", FILE_APPEND);
+        if (f) {
+            f.print(String(millis())); f.print(",RESP,"); f.println(resp);
+            f.close();
+        }
+    }
 }
