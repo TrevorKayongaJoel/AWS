@@ -36,6 +36,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
+#include <SD.h>
 #include "esp_sleep.h"
 
 #include "DHT22.h"
@@ -128,11 +129,30 @@ float computeAvgPower(float duty, float pActive_mW, float pSleep_mW) {
 }
 
 // =========================================================
+// Debug logging helper
+// =========================================================
+void logDebugEvent(const String &event) {
+    if (!SD.begin(4)) {
+        Serial.println("[DC] debug SD mount failed");
+        return;
+    }
+    File f = SD.open("/sleep_debug.txt", FILE_APPEND);
+    if (!f) {
+        Serial.println("[DC] failed to open /sleep_debug.txt");
+        return;
+    }
+    f.println(String(millis()) + "," + event);
+    f.close();
+}
+
+// =========================================================
 // GSM POWER GATE — ON
 // =========================================================
 void gsmPowerOn() {
     Serial.println("[DC] GSM Power Gate: ON");
     digitalWrite(GSM_POWER_PIN, HIGH);
+    delay(50);
+    Serial.printf("[DC] GSM_POWER_PIN=%d state=%d\n", GSM_POWER_PIN, digitalRead(GSM_POWER_PIN));
     delay(GSM_WARMUP_MS);  // Wait for modem boot + network registration
     simmodule.setupGSM();
 }
@@ -140,11 +160,14 @@ void gsmPowerOn() {
 // =========================================================
 // GSM POWER GATE — OFF
 // De-energise MOSFET immediately after TX.
-// D_GSM = 20s / (UPDATE_INTERVAL_MINUTES * 60)s → Pavg ≈ 11.2mW (~180x reduction vs 2W continuous)
+// D_GSM = 20s / (UPDATE_INTERVAL_MINUTES * 60)s → Pavg ≈ 11.2mW (~180x reduction vs continuous 2W)
 // =========================================================
 void gsmPowerOff() {
     Serial.println("[DC] GSM Power Gate: OFF");
     digitalWrite(GSM_POWER_PIN, LOW);
+    delay(50);
+    Serial.printf("[DC] GSM_POWER_PIN=%d state=%d\n", GSM_POWER_PIN, digitalRead(GSM_POWER_PIN));
+    logDebugEvent("GSM_OFF");
 }
 
 // =========================================================
@@ -158,6 +181,8 @@ void loraSleep() {
     while (SerialL.available()) SerialL.read();  // Clear any pending RX bytes
     SerialL.println("AT+LOWPOWER");
     delay(200);  // Allow module to process command and enter sleep
+    Serial.println("[DC] LoRa sleep command sent");
+    logDebugEvent("LORA_SLEEP_CMD_SENT");
 }
 
 // =========================================================
@@ -173,6 +198,7 @@ void loraWake() {
 
     // Optional: flush the "OK" response
     while (SerialL.available()) SerialL.read();
+    Serial.println("[DC] LoRa wake command sent");
 }
 
 // =========================================================
@@ -183,6 +209,7 @@ void loraWake() {
 void sdCardRelease() {
     SPI.end();
     Serial.println("[DC] SD SPI bus released");
+    Serial.printf("[DC] SPI active? %d\n", SPI.isEnabled());
 }
 
 // =========================================================
@@ -202,6 +229,7 @@ void enterDeepSleep() {
     Serial.printf("[DC] Est. avg ESP32 current: %.2f mA\n", pavg_esp);
     Serial.printf("[DC] Sleeping %.0f min (TOFF)...\n\n", (float)(TOFF_US / 60000000ULL));
     Serial.flush();
+    logDebugEvent("ENTER_DEEPSLEEP:TOFF_US=" + String(TOFF_US));
 
     esp_sleep_enable_timer_wakeup(TOFF_US);
     esp_deep_sleep_start();  // Does not return
@@ -334,9 +362,12 @@ void setup() {
 
     // Log wake reason
     esp_sleep_wakeup_cause_t wakeReason = esp_sleep_get_wakeup_cause();
+    String wakeReasonStr;
     if (wakeReason == ESP_SLEEP_WAKEUP_TIMER) {
+        wakeReasonStr = "RTC timer (TOFF elapsed)";
         Serial.println("\n[DC] === Wake: RTC timer (TOFF elapsed) ===");
     } else {
+        wakeReasonStr = "Cold boot / manual reset";
         Serial.println("\n[DC] === Wake: Cold boot / manual reset ===");
     }
 
@@ -353,6 +384,7 @@ void setup() {
 
     // RTC (DS3231, I2C — Wire already initialised above)
     rtc1.setupRTC();
+    logDebugEvent("WAKE_REASON:" + wakeReasonStr + ",TIME:" + String(rtc1.getDateTime().c_str()));
 
     // Sensors
     dhtsensor.getsensor();
@@ -382,6 +414,12 @@ void setup() {
     transmitData(currentData);                  // ~75s worst case (3-channel GSM upload)
 
     Serial.printf("[DC] Active window closed. Elapsed: %lu ms\n", millis() - tonStart);
+    Serial.println("[DC] Sleep phase: preparing to enter deep sleep");
+    Serial.println("[DC] State at entry:");
+    Serial.println("[DC]   GSM: OFF expected");
+    Serial.println("[DC]   LoRa: SLEEP expected");
+    Serial.println("[DC]   SD: SPI released expected");
+    Serial.println("[DC]   RTC: ON expected");
 
     // =====================================================
     //  SLEEP PHASE  (TOFF = (UPDATE_INTERVAL_MINUTES - 2) minutes)
