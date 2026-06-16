@@ -6,11 +6,11 @@ String THINGSPEAK_IP = "http://184.106.153.149";
 DataLogger::DataLogger(int csPin) {
     _csPin = csPin;
     _fileName = "/datalog.txt";
+    _queueFileName = "/queue.txt";
     _lastDataString = "";
 }
 
 void DataLogger::begin() {
-    // Initialize SPI before SD (ensure pins are correct for your board)
     if (!SD.begin(_csPin)) {
         Serial.println("SD Card Mount Failed");
         return;
@@ -20,7 +20,6 @@ void DataLogger::begin() {
 
 void DataLogger::logSensorData(String timestamp, SensorData data) {
     String dataStr = "";
-    // Note: Ensure your sensor code handles failures so these aren't all "0"
     dataStr += "Time:" + timestamp + ",";
     dataStr += "Press:" + String(data.airPressure, 2) + ",";
     dataStr += "Alt:" + String(data.altitude, 2) + ",";
@@ -39,15 +38,125 @@ void DataLogger::logSensorData(String timestamp, SensorData data) {
     dataStr += "CBatt:" + String(data.curr_batt, 2) + ",";
     dataStr += "CSol:" + String(data.curr_solar, 2);
 
-    File file = SD.open(_fileName, FILE_APPEND);
-    if (file) {
-        file.println(dataStr);
-        file.close();
-        Serial.println("Logged: " + dataStr);
-        _lastDataString = dataStr; 
-    } else {
-        Serial.println("Error writing to SD");
+    // 1. Write to Archive (Permanent)
+    File archFile = SD.open(_fileName, FILE_APPEND);
+    if (archFile) {
+        archFile.println(dataStr);
+        archFile.close();
     }
+
+    // 2. Write to Queue (Buffer)
+    File queueFile = SD.open(_queueFileName, FILE_APPEND);
+    if (queueFile) {
+        queueFile.println(dataStr);
+        queueFile.close();
+        Serial.println("Queued: " + dataStr);
+    }
+}
+
+void DataLogger::uploadPendingData(GSM &gsmModule, unsigned long startTimeMs, unsigned long tonLimitMs) {
+    while (true) {
+        // Check if we still have time in the TON window (leave 45s margin for a full 3-channel upload)
+        if (millis() - startTimeMs > (tonLimitMs - 45000)) {
+            Serial.println("[Queue] TON limit approaching. Saving remaining for next cycle.");
+            break;
+        }
+
+        if (!SD.exists(_queueFileName)) {
+            Serial.println("[Queue] No pending data.");
+            break;
+        }
+
+        File queueFile = SD.open(_queueFileName, FILE_READ);
+        if (!queueFile || queueFile.size() == 0) {
+            if (queueFile) queueFile.close();
+            SD.remove(_queueFileName);
+            break;
+        }
+
+        // Read the first line (oldest)
+        String line = queueFile.readStringUntil('\n');
+        line.trim();
+        queueFile.close();
+
+        if (line == "") {
+            popQueue(); // Remove empty lines
+            continue;
+        }
+
+        Serial.println("[Queue] Attempting upload of oldest record...");
+        
+        // CHANNEL 1
+        String url1 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_1;
+        url1 += "&field1=" + getValueFromLog(line, "Temp");
+        url1 += "&field2=" + getValueFromLog(line, "Hum");
+        url1 += "&field3=" + getValueFromLog(line, "Press");
+        url1 += "&field4=" + getValueFromLog(line, "Rain");
+        url1 += "&field5=" + getValueFromLog(line, "WSpd");
+        url1 += "&field6=" + getValueFromLog(line, "WDir");
+        url1 += "&field7=" + getValueFromLog(line, "Light");
+        url1 += "&field8=" + getValueFromLog(line, "SoilM");
+
+        bool success = gsmModule.sendThingSpeakRequest(url1);
+        
+        if (success) {
+            delay(16000); // Rate limit
+            
+            // CHANNEL 2
+            String url2 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_2;
+            url2 += "&field1=" + getValueFromLog(line, "V33");
+            url2 += "&field2=" + getValueFromLog(line, "V5");
+            url2 += "&field3=" + getValueFromLog(line, "VBatt");
+            url2 += "&field4=" + getValueFromLog(line, "VSol");
+            url2 += "&field5=" + getValueFromLog(line, "VDC");
+            gsmModule.sendThingSpeakRequest(url2);
+            
+            delay(16000); // Rate limit
+
+            // CHANNEL 3
+            String url3 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_3;
+            url3 += "&field1=" + getValueFromLog(line, "CBatt");
+            url3 += "&field2=" + getValueFromLog(line, "CSol");
+            gsmModule.sendThingSpeakRequest(url3);
+
+            Serial.println("[Queue] Upload successful. Popping from queue.");
+            popQueue();
+        } else {
+            Serial.println("[Queue] Upload failed. GSM likely offline. Stopping.");
+            break; // Stop trying if GSM is failing
+        }
+    }
+}
+
+bool DataLogger::popQueue() {
+    if (!SD.exists(_queueFileName)) return false;
+
+    File queueFile = SD.open(_queueFileName, FILE_READ);
+    if (!queueFile) return false;
+
+    File tempFile = SD.open("/temp_q.txt", FILE_WRITE);
+    if (!tempFile) {
+        queueFile.close();
+        return false;
+    }
+
+    // Skip the first line
+    bool skipped = false;
+    while (queueFile.available()) {
+        String line = queueFile.readStringUntil('\n');
+        if (!skipped) {
+            skipped = true;
+            continue;
+        }
+        tempFile.println(line);
+    }
+
+    queueFile.close();
+    tempFile.close();
+
+    SD.remove(_queueFileName);
+    SD.rename("/temp_q.txt", _queueFileName);
+    return true;
 }
 
 String DataLogger::getValueFromLog(String logLine, String label) {
@@ -60,50 +169,4 @@ String DataLogger::getValueFromLog(String logLine, String label) {
     if (endIndex == -1) endIndex = logLine.length(); 
     
     return logLine.substring(startIndex, endIndex);
-}
-
-void DataLogger::uploadLastDataToThingspeak(GSM &gsmModule) {
-    if (_lastDataString == "") {
-        Serial.println("No data to upload.");
-        return;
-    }
-
-    Serial.println("Starting Upload Sequence (Approx 45 seconds)...");
-
-    // CHANNEL 1
-    String url1 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_1;
-    url1 += "&field1=" + getValueFromLog(_lastDataString, "Temp");
-    url1 += "&field2=" + getValueFromLog(_lastDataString, "Hum");
-    url1 += "&field3=" + getValueFromLog(_lastDataString, "Press");
-    url1 += "&field4=" + getValueFromLog(_lastDataString, "Rain");
-    url1 += "&field5=" + getValueFromLog(_lastDataString, "WSpd");
-    url1 += "&field6=" + getValueFromLog(_lastDataString, "WDir");
-    url1 += "&field7=" + getValueFromLog(_lastDataString, "Light");
-    url1 += "&field8=" + getValueFromLog(_lastDataString, "SoilM");
-
-    gsmModule.sendThingSpeakRequest(url1);
-    
-    Serial.println("Waiting 16s for ThingSpeak Rate Limit...");
-    delay(16000); // CRITICAL: ThingSpeak blocks if < 15s
-
-    // CHANNEL 2 (Voltage)
-    String url2 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_2;
-    url2 += "&field1=" + getValueFromLog(_lastDataString, "V33");
-    url2 += "&field2=" + getValueFromLog(_lastDataString, "V5");
-    url2 += "&field3=" + getValueFromLog(_lastDataString, "VBatt");
-    url2 += "&field4=" + getValueFromLog(_lastDataString, "VSol");
-    url2 += "&field5=" + getValueFromLog(_lastDataString, "VDC");
-    
-    gsmModule.sendThingSpeakRequest(url2);
-
-    Serial.println("Waiting 16s for ThingSpeak Rate Limit...");
-    delay(16000); // CRITICAL: ThingSpeak blocks if < 15s
-
-    // CHANNEL 3 (Current)
-    String url3 = THINGSPEAK_IP + "/update?api_key=" + API_KEY_3;
-    url3 += "&field1=" + getValueFromLog(_lastDataString, "CBatt");
-    url3 += "&field2=" + getValueFromLog(_lastDataString, "CSol");
-
-    gsmModule.sendThingSpeakRequest(url3);
-    Serial.println("All channels updated.");
 }

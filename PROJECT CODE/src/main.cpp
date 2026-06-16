@@ -2,35 +2,9 @@
  * main.cpp — Multi-Level Fixed Duty Cycling Implementation
  * =========================================================
  * Strategy (from design document):
- *   UPDATE_INTERVAL_MINUTES = 30 minutes (total cycle time)
+ *   UPDATE_INTERVAL_MINUTES = 10 minutes (total cycle time)
  *   TON  = 2 minutes  (active window: sensors + log + transmit)
- *   TOFF = (UPDATE_INTERVAL_MINUTES - 2) minutes (deep sleep)
- *   D(k) = TON / (TON + TOFF) = 2/UPDATE_INTERVAL_MINUTES (6.7% active for 30min cycle)
- *
- * Per-module duty cycling:
- *   ESP32   — deep sleep during TOFF (10-150µA via esp_deep_sleep_start())
- *   GSM     — MOSFET power gate on GPIO 32; ON only during TX, OFF immediately after
- *             D_GSM = 20s / (UPDATE_INTERVAL_MINUTES * 60)s → Pavg ≈ 11.2mW vs 2W continuous (~180x reduction)
- *   LoRa    — AT+LOWPOWER command over UART; wakes automatically on next UART byte
- *             RA-08H deep sleep current: 0.9µA (confirmed from datasheet)
- *   Sensors — read only during active window (~2s active per UPDATE_INTERVAL_MINUTES * 60s period)
- *             D_sensor = 2 / (UPDATE_INTERVAL_MINUTES * 60) → Pavg ≈ 5.03mW vs 120mW continuous (24x reduction for 30min cycle)
- *   SD card — SPI disabled immediately after write (batched logging)
- *   RTC     — always ON; maintains time during deep sleep, triggers wake
- *
- * RA-08H (Ai-Thinker) AT command reference:
- *   Sleep  : AT+LOWPOWER    → module enters deep sleep (0.9µA)
- *   Wake   : any UART byte  → module wakes automatically on RX line activity
- *   UART   : 9600 baud, 8N1 (default per datasheet — matches LORA.cpp)
- *   TX data: AT+DTRX=<confirm>,<nbtrials>,<len>,<data>
- *            e.g. AT+DTRX=0,1,6,AABBCC  (unconfirmed, 1 trial)
- *
- * Fixes applied after header review:
- *   [1] LoRa uses HardwareSerial (UART), not SPI — confirmed from LORA.h
- *   [2] Lora::sendData() returns void — no ACK available from class
- *   [3] Removed SENSOR_PWR_PIN 33 — conflicts with ONE_WIRE_BUS 33 in SOILTEMP.h
- *   [4] Wire.begin() called once only via powermonitoring.begin()
- *   [5] SoilTemp excluded to match your original object list in main.cpp
+ *   TOFF = Dynamic (Total Cycle - Active Time)
  */
 
 #include <Arduino.h>
@@ -53,60 +27,14 @@
 #include "SensorData.h"
 #include "LORA.h"
 
-// =========================================================
-// FIXED DUTY CYCLING PARAMETERS
-// =========================================================
-// UPDATE_INTERVAL_MINUTES = total cycle time (e.g., 30 minutes)
-// TON  = 2 min  → active window (sensors + log + TX)
-// TOFF = (UPDATE_INTERVAL_MINUTES - 2) min → deep sleep window
-// D(k) = TON / (TON + TOFF) = 2 / UPDATE_INTERVAL_MINUTES
+static const uint32_t UPDATE_INTERVAL_MINUTES = 10;
+static const uint64_t TON_MS  = 2ULL  * 60ULL * 1000ULL;
 
-static const uint32_t UPDATE_INTERVAL_MINUTES = 10;  // Total cycle time in minutes
-static const uint64_t TON_MS  = 2ULL  * 60ULL * 1000ULL;    // 2 min in ms
-static const uint64_t TOFF_US = (UPDATE_INTERVAL_MINUTES - 2ULL) * 60ULL * 1000000ULL; // TOFF in µs (deep sleep API)
-
-// =========================================================
-// GSM MOSFET POWER GATE PIN
-// =========================================================
-// Wire a high-side MOSFET (e.g. IRLZ44N) between this GPIO
-// and the GSM module's VCC rail:
-//   GPIO HIGH = GSM powered ON
-//   GPIO LOW  = GSM powered OFF (set LOW at boot)
-//
-// GPIO 32 is safe — does not conflict with any sensor pins:
-//   Pin  5 = DHT22 data         (DHT22.h)
-//   Pin  4 = SD card CS         (DataLogger)
-//   Pin 14 = LoRa RX            (LORA.cpp)
-//   Pin 15 = LoRa TX            (LORA.cpp)
-//   Pin 16 = GSM RX             (GSM.cpp)
-//   Pin 17 = GSM TX             (GSM.cpp)
-//   Pin 21 = I2C SDA
-//   Pin 22 = I2C SCL
-//   Pin 25 = Rain gauge ISR     (DAVIS.h)
-//   Pin 26 = Wind speed ISR     (WINDSPEED.h)
-//   Pin 27 = Wind direction ADC (WIND_DIRECTION.h)
-//   Pin 33 = DS18B20 one-wire   (SOILTEMP.h) ← do not use
-//   Pin 34 = Soil moisture ADC  (SOILMOISTURE.h)
-//   Pin 35 = Light sensor ADC   (LIGHT_SENSOR.h)
 #define GSM_POWER_PIN  32
+static const uint32_t GSM_WARMUP_MS = 3000;
 
-static const uint32_t GSM_WARMUP_MS = 3000;  // Time for GSM to boot and register on network
-
-// =========================================================
-// LORA — RA-08H (Ai-Thinker) UART interface
-// =========================================================
-// LORA.cpp declares: HardwareSerial SerialL = Serial1 (RX=14, TX=15, 9600 baud)
-// We declare it extern here to send AT commands directly without re-initialising.
-//
-// RA-08H sleep/wake (confirmed from Ai-Thinker datasheet + AT command doc):
-//   Sleep : "AT+LOWPOWER\r\n"  → enters deep sleep, current drops to 0.9µA
-//   Wake  : any byte on RX     → module wakes automatically (no explicit wake command)
-//           send "AT\r\n" first to flush and confirm module is awake before TX
 extern HardwareSerial SerialL;
 
-// =========================================================
-// OBJECTS
-// =========================================================
 DHTSensor            dhtsensor;
 AirPressure          airpressure;
 LightSensor          lightsensor;
@@ -115,161 +43,88 @@ Rtc                  rtc1;
 Davis                davisrain;
 WindSpeedSensor      windspeedsensor;
 WindDirectionSensor  winddirectionsensor;
-PowerMonitoring      powermonitoring;   // begin() calls Wire.begin() internally
+PowerMonitoring      powermonitoring;
 GSM                  simmodule;
 Lora                 loramodule;
-DataLogger           dataLogger(4);     // SD CS pin = 4
+DataLogger           dataLogger(4);
 
-// =========================================================
-// UTILITY: AVERAGE POWER FORMULA
-// Pavg(k) = D(k) * Pactive + (1 - D(k)) * Psleep
-// =========================================================
 float computeAvgPower(float duty, float pActive_mW, float pSleep_mW) {
     return (duty * pActive_mW) + ((1.0f - duty) * pSleep_mW);
 }
 
-// =========================================================
-// Debug logging helper
-// =========================================================
 void logDebugEvent(const String &event) {
-    if (!SD.begin(4)) {
-        Serial.println("[DC] debug SD mount failed");
-        return;
-    }
+    if (!SD.begin(4)) return;
     File f = SD.open("/sleep_debug.txt", FILE_APPEND);
-    if (!f) {
-        Serial.println("[DC] failed to open /sleep_debug.txt");
-        return;
-    }
+    if (!f) return;
     f.println(String(millis()) + "," + event);
     f.close();
 }
 
-// =========================================================
-// GSM POWER GATE — ON
-// =========================================================
 void gsmPowerOn() {
     Serial.println("[DC] GSM Power Gate: ON");
     digitalWrite(GSM_POWER_PIN, HIGH);
-    delay(50);
-    Serial.printf("[DC] GSM_POWER_PIN=%d state=%d\n", GSM_POWER_PIN, digitalRead(GSM_POWER_PIN));
-    delay(GSM_WARMUP_MS);  // Wait for modem boot + network registration
+    delay(GSM_WARMUP_MS);
     simmodule.setupGSM();
 }
 
-// =========================================================
-// GSM POWER GATE — OFF
-// De-energise MOSFET immediately after TX.
-// D_GSM = 20s / (UPDATE_INTERVAL_MINUTES * 60)s → Pavg ≈ 11.2mW (~180x reduction vs continuous 2W)
-// =========================================================
 void gsmPowerOff() {
     Serial.println("[DC] GSM Power Gate: OFF");
     digitalWrite(GSM_POWER_PIN, LOW);
-    delay(50);
-    Serial.printf("[DC] GSM_POWER_PIN=%d state=%d\n", GSM_POWER_PIN, digitalRead(GSM_POWER_PIN));
-    logDebugEvent("GSM_OFF");
 }
 
-// =========================================================
-// LORA SLEEP — RA-08H specific
-// Command: AT+LOWPOWER
-// Response: +LOWPOWER: SLEEP (then silent)
-// Deep sleep current: 0.9µA (Ai-Thinker RA-08H datasheet)
-// =========================================================
 void loraSleep() {
-    Serial.println("[DC] LoRa: AT+LOWPOWER (0.9µA deep sleep)");
-    while (SerialL.available()) SerialL.read();  // Clear any pending RX bytes
-    SerialL.println("AT+LOWPOWER");
-    delay(200);  // Allow module to process command and enter sleep
-    Serial.println("[DC] LoRa sleep command sent");
-    logDebugEvent("LORA_SLEEP_CMD_SENT");
-}
-
-// =========================================================
-// LORA WAKE — RA-08H specific
-// The RA-08H wakes automatically when any byte arrives on UART RX.
-// We send "AT\r\n" as the wake byte, then wait for "OK" before TX.
-// This is standard practice for ASR6601-based modules.
-// =========================================================
-void loraWake() {
-    Serial.println("[DC] LoRa: waking (sending AT)");
-    SerialL.println("AT");   // Wake byte — any UART activity wakes the RA-08H
-    delay(300);              // Allow module to wake and stabilise before TX
-
-    // Optional: flush the "OK" response
+    Serial.println("[DC] LoRa: AT+LOWPOWER");
     while (SerialL.available()) SerialL.read();
-    Serial.println("[DC] LoRa wake command sent");
+    SerialL.println("AT+LOWPOWER");
+    delay(200);
 }
 
-// =========================================================
-// SD CARD: RELEASE SPI BUS AFTER WRITE
-// DataLogger already closes the file handle after each write.
-// SPI.end() also disables the peripheral to eliminate idle draw.
-// =========================================================
+void loraWake() {
+    Serial.println("[DC] LoRa: waking");
+    SerialL.println("AT");
+    delay(300);
+    while (SerialL.available()) SerialL.read();
+}
+
 void sdCardRelease() {
+    SD.end();
     SPI.end();
     Serial.println("[DC] SD SPI bus released");
-    Serial.printf("[DC] SPI active? %d\n", SPI.isEnabled());
 }
 
-// =========================================================
-// DEEP SLEEP — TOFF = 28 minutes
-// During sleep:
-//   CPU, WiFi, BT, most peripherals: OFF
-//   RTC timer + RTC memory:          ON  (~10-150µA total)
-// This function does not return.
-// On wake, the ESP32 reboots and setup() runs from the top.
-// =========================================================
-void enterDeepSleep() {
-    float duty     = (float)TON_MS / ((float)TON_MS + (float)(TOFF_US / 1000ULL));
-    float pavg_esp = computeAvgPower(duty, 200.0f, 0.15f);  // 200mA active, 0.15mA deep sleep
+void enterDeepSleep(unsigned long tonStart) {
+    // Detach FIRST — before any other teardown
+    detachInterrupt(digitalPinToInterrupt(25));
+    detachInterrupt(digitalPinToInterrupt(33));
+    delay(50); // Let any in-flight ISR finish
 
-    Serial.printf("[DC] D = %.4f (%.1f%% active | %.1f%% sleep)\n",
-                  duty, duty * 100.0f, (1.0f - duty) * 100.0f);
-    Serial.printf("[DC] Est. avg ESP32 current: %.2f mA\n", pavg_esp);
-    Serial.printf("[DC] Sleeping %.0f min (TOFF)...\n\n", (float)(TOFF_US / 60000000ULL));
-    Serial.flush();
-    logDebugEvent("ENTER_DEEPSLEEP:TOFF_US=" + String(TOFF_US));
+    uint64_t totalCycleUs = (uint64_t)UPDATE_INTERVAL_MINUTES * 60ULL * 1000000ULL;
+    uint64_t activeUs = (uint64_t)(millis() - tonStart) * 1000ULL;
+    uint64_t sleepUs = (totalCycleUs > activeUs) ? (totalCycleUs - activeUs) : (10ULL * 1000000ULL);
 
-    esp_sleep_enable_timer_wakeup(TOFF_US);
-    esp_deep_sleep_start();  // Does not return
+    Serial.printf("[DC] Total Active Time: %lu ms\n", (unsigned long)(activeUs / 1000ULL));
+    Serial.printf("[DC] Deep Sleep Duration: %lu ms\n", (unsigned long)(sleepUs / 1000ULL));
+    Serial.flush(); // Ensure serial output completes before sleep
+
+    esp_sleep_enable_timer_wakeup(sleepUs);
+    esp_deep_sleep_start();
 }
 
-// =========================================================
-// PHASE 1: READ ALL SENSORS
-// D_sensor = 2s / (UPDATE_INTERVAL_MINUTES * 60)s
-// Pavg = D_sensor*120mW + (1 - D_sensor)*5mW ≈ 5.03mW (24x reduction for 30min cycle)
-// =========================================================
 SensorData readAllSensors() {
     SensorData data;
-    Serial.println("[DC] === Sensor Read Phase ===");
+    data.airPressure = airpressure.readPressure();
+    data.altitude = airpressure.readAltitude(1013.25);
+    data.temperature = airpressure.readTemperature();
+    data.humidity = airpressure.readHumidity();
 
-    // BME280 (I2C 0x77)
-    float p = airpressure.readPressure();
-    data.airPressure = isnan(p) ? 0.0f : p;
-
-    float alt = airpressure.readAltitude(1013.25);
-    data.altitude = isnan(alt) ? 0.0f : alt;
-
-    float t = airpressure.readTemperature();
-    data.temperature = isnan(t) ? 0.0f : t;
-
-    float hum = airpressure.readHumidity();
-    data.humidity = isnan(hum) ? 0.0f : hum;
-
-    // STM32 power board (I2C 0x08)
     if (powermonitoring.readData()) {
         VoltageData v = powermonitoring.getData();
-        data.volt_3v3   = v.v1;
-        data.volt_5v    = v.v2;
-        data.volt_batt  = v.v3;
-        data.volt_solar = v.v4;
-        data.volt_dc    = v.v5;
-        data.curr_batt  = v.v6;
+        data.volt_3v3   = v.v1; data.volt_5v = v.v2; data.volt_batt = v.v3;
+        data.volt_solar = v.v4; data.volt_dc = v.v5; data.curr_batt = v.v6;
         data.curr_solar = v.v7;
     } else {
-        data.volt_3v3 = data.volt_5v    = data.volt_batt  = 0.0f;
-        data.volt_solar = data.volt_dc  = data.curr_batt  = data.curr_solar = 0.0f;
+        data.volt_3v3 = data.volt_5v = data.volt_batt = 0.0f;
+        data.volt_solar = data.volt_dc = data.curr_batt = data.curr_solar = 0.0f;
     }
 
     data.lightLevel    = lightsensor.readLightLevel();
@@ -278,115 +133,73 @@ SensorData readAllSensors() {
     data.windSpeed     = windspeedsensor.readWindSpeedKPH();
     data.windDirection = winddirectionsensor.readWindDirectionDeg();
 
-    Serial.println("[DC] Sensor read complete.");
     return data;
 }
 
-// =========================================================
-// PHASE 2: LOG TO SD (BATCHED)
-// SPI released after write to stop idle current draw.
-// =========================================================
 void logToSD(SensorData &data) {
     Serial.println("[DC] === SD Log Phase ===");
     String timeStr = String(rtc1.getDateTime().c_str());
     dataLogger.logSensorData(timeStr, data);
-    sdCardRelease();
 }
 
-// =========================================================
-// PHASE 3: TRANSMIT
-// LoRa (RA-08H) = primary channel, lower energy.
-// GSM            = backup / ThingSpeak cloud upload, MOSFET gated.
-//
-// RA-08H TX command format (LoRaWAN unconfirmed uplink):
-//   AT+DTRX=<confirm>,<nbtrials>,<len>,<data>
-//   confirm  : 0 = unconfirmed, 1 = confirmed
-//   nbtrials : number of retries (1 for fixed duty cycling)
-//   len      : byte length of hex data field
-//   data     : hex-encoded payload
-//
-// Example for 12-byte payload "AABBCCDD...":
-//   AT+DTRX=0,1,12,AABBCCDD...
-//
-// Lora::sendData(String, int) in LORA.cpp sends the raw string
-// over SerialL and waits for the timeout. We pass the full
-// AT+DTRX command as the string.
-// =========================================================
-void transmitData(SensorData &data) {
+void transmitData(SensorData &data, unsigned long tonStart) {
     Serial.println("[DC] === TX Phase ===");
-
-    // --- LoRa TX (RA-08H, primary) ---
     loraWake();
-
-    // Build a human-readable CSV payload for LoRa uplink.
-    // The RA-08H AT+DTRX command sends raw bytes — using ASCII CSV here
-    // for easy decoding at the gateway. Adjust field selection as needed.
-    String payload =
-        "T:"  + String(data.temperature, 1) +
-        ",H:" + String(data.humidity, 1) +
-        ",P:" + String(data.airPressure, 1) +
-        ",WS:"+ String(data.windSpeed, 1) +
-        ",WD:"+ String(data.windDirection) +
-        ",R:" + String(data.rainCount) +
-        ",L:" + String(data.lightLevel, 2) +
-        ",SM:"+ String(data.soilMoisture, 2) +
-        ",VB:"+ String(data.volt_batt, 2) +
-        ",VS:"+ String(data.volt_solar, 2);
-
-    // Build AT+DTRX command:
-    //   confirm=0 (unconfirmed), nbtrials=1, len=payload length in bytes
+    String payload = "T:" + String(data.temperature, 1) + ",H:" + String(data.humidity, 1);
     String atCmd = "AT+DTRX=0,1," + String(payload.length()) + "," + payload;
+    loramodule.sendData(atCmd, 3000);
+    loraSleep();
 
-    Serial.println("[DC] LoRa TX: " + atCmd);
-    loramodule.sendData(atCmd, 3000);  // sendData sends the string over SerialL
-
-    loraSleep();  // Return RA-08H to 0.9µA deep sleep immediately after TX
-    Serial.println("[DC] LoRa TX done, RA-08H sleeping (0.9µA).");
-
-    // --- GSM TX (backup / ThingSpeak cloud upload) ---
-    // MOSFET gate energised only for TX window.
-    // D_GSM ≈ 0.0056 → Pavg_GSM ≈ 11.2mW (~180x reduction vs continuous 2W)
     gsmPowerOn();
-    dataLogger.uploadLastDataToThingspeak(simmodule);
+    dataLogger.uploadPendingData(simmodule, tonStart, TON_MS);
     gsmPowerOff();
-
     Serial.println("[DC] TX Phase complete.");
 }
 
-// =========================================================
-// SETUP — runs on every wake from deep sleep (and cold boot)
-// =========================================================
 void setup() {
     Serial.begin(9600);
     delay(200);
+    
+    Wire.setTimeOut(50); // Set global I2C timeout to prevent hangs
+    
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    esp_reset_reason_t reset_reason = esp_reset_reason();
 
-    // Log wake reason
-    esp_sleep_wakeup_cause_t wakeReason = esp_sleep_get_wakeup_cause();
-    String wakeReasonStr;
-    if (wakeReason == ESP_SLEEP_WAKEUP_TIMER) {
-        wakeReasonStr = "RTC timer (TOFF elapsed)";
-        Serial.println("\n[DC] === Wake: RTC timer (TOFF elapsed) ===");
-    } else {
-        wakeReasonStr = "Cold boot / manual reset";
-        Serial.println("\n[DC] === Wake: Cold boot / manual reset ===");
+    Serial.println("\n[DC] ================================");
+    Serial.print("[DC] Wakeup reason: ");
+    switch (wakeup_reason) {
+        case ESP_SLEEP_WAKEUP_EXT0:     Serial.println("External signal using RTC_IO"); break;
+        case ESP_SLEEP_WAKEUP_EXT1:     Serial.println("External signal using RTC_CNTL"); break;
+        case ESP_SLEEP_WAKEUP_TIMER:    Serial.println("Timer"); break;
+        case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("Touchpad"); break;
+        case ESP_SLEEP_WAKEUP_ULP:      Serial.println("ULP program"); break;
+        default:                        Serial.printf("Not caused by deep sleep (%d)\n", wakeup_reason); break;
     }
 
-    float D = (float)TON_MS / ((float)TON_MS + (float)(TOFF_US / 1000ULL));
-    Serial.printf("[DC] TON=2min | TOFF=%umin | D=%.3f (%.1f%% active)\n", UPDATE_INTERVAL_MINUTES - 2, D, D * 100.0f);
-
-    // GSM MOSFET gate — LOW (OFF) at boot
+    Serial.print("[DC] Reset reason: ");
+    switch (reset_reason) {
+        case ESP_RST_POWERON:   Serial.println("Power-on"); break;
+        case ESP_RST_EXT:       Serial.println("External pin"); break;
+        case ESP_RST_SW:        Serial.println("Software"); break;
+        case ESP_RST_PANIC:     Serial.println("Exception/Panic"); break;
+        case ESP_RST_INT_WDT:   Serial.println("Interrupt Watchdog"); break;
+        case ESP_RST_TASK_WDT:  Serial.println("Task Watchdog"); break;
+        case ESP_RST_WDT:       Serial.println("Other Watchdog"); break;
+        case ESP_RST_DEEPSLEEP: Serial.println("Deep Sleep"); break;
+        case ESP_RST_BROWNOUT:  Serial.println("Brownout"); break;
+        case ESP_RST_SDIO:      Serial.println("SDIO"); break;
+        default:                Serial.println("Unknown"); break;
+    }
+    Serial.println("[DC] ================================");
+    
     pinMode(GSM_POWER_PIN, OUTPUT);
     digitalWrite(GSM_POWER_PIN, LOW);
 
-    // I2C — one initialisation via PowerMonitoring::begin()
-    // Shared by: BME280 (0x77), DS3231 RTC, STM32 power board (0x08)
-    powermonitoring.begin(21, 22);  // SDA=21, SCL=22
+    powermonitoring.begin(21, 22);
+    delay(100);
 
-    // RTC (DS3231, I2C — Wire already initialised above)
     rtc1.setupRTC();
-    logDebugEvent("WAKE_REASON:" + wakeReasonStr + ",TIME:" + String(rtc1.getDateTime().c_str()));
 
-    // Sensors
     dhtsensor.getsensor();
     airpressure.sensor_setup();
     davisrain.setupRainGauge();
@@ -395,53 +208,20 @@ void setup() {
     lightsensor.setupSensor();
     soilmoisture.setupSensor();
 
-    // SD card (SPI, CS=4)
     dataLogger.begin();
-
-    // LoRa RA-08H (UART Serial1, RX=14, TX=15, 9600 baud)
     loramodule.setupLora();
 
-    // =====================================================
-    //  ACTIVE WINDOW  (TON = 2 minutes)
-    //  All processing happens here. After this block, the
-    //  ESP32 enters deep sleep for TOFF ((UPDATE_INTERVAL_MINUTES - 2) minutes).
-    // =====================================================
     unsigned long tonStart = millis();
-    Serial.printf("[DC] Active window open (TON = %llu ms)\n", TON_MS);
-
-    SensorData currentData = readAllSensors();  // ~2-5s
-    logToSD(currentData);                       // ~1s, SPI released after
-    transmitData(currentData);                  // ~75s worst case (3-channel GSM upload)
+    SensorData currentData = readAllSensors();
+    logToSD(currentData);
+    transmitData(currentData, tonStart);
 
     Serial.printf("[DC] Active window closed. Elapsed: %lu ms\n", millis() - tonStart);
-    Serial.println("[DC] Sleep phase: preparing to enter deep sleep");
-    Serial.println("[DC] State at entry:");
-    Serial.println("[DC]   GSM: OFF expected");
-    Serial.println("[DC]   LoRa: SLEEP expected");
-    Serial.println("[DC]   SD: SPI released expected");
-    Serial.println("[DC]   RTC: ON expected");
+    
+    sdCardRelease();
 
-    // =====================================================
-    //  SLEEP PHASE  (TOFF = (UPDATE_INTERVAL_MINUTES - 2) minutes)
-    //  State at entry:
-    //    GSM:  OFF  (gsmPowerOff() called in transmitData)
-    //    LoRa: SLEEP 0.9µA (AT+LOWPOWER sent in transmitData)
-    //    SD:   SPI released (sdCardRelease() called in logToSD)
-    //    RTC:  ON   (runs during ESP32 deep sleep, fires wake timer)
-    // =====================================================
-    enterDeepSleep();  // Does not return — next execution is setup() on wake
+    Serial.println("[DC] Sleep phase: entering deep sleep");
+    enterDeepSleep(tonStart);
 }
 
-// =========================================================
-// LOOP — intentionally empty
-// Duty cycle: setup() → TON (active) → deep sleep (TOFF) → wake → setup()
-// =========================================================
-void loop() {
-    // Intentionally empty.
-    //
-    // Debug fallback (no deep sleep): comment out enterDeepSleep()
-    // in setup() and uncomment below:
-    //
-    // delay((uint32_t)(TOFF_US / 1000ULL));
-    // setup();
-}
+void loop() {}

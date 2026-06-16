@@ -17,21 +17,22 @@ void Lora::setupLora() {
 
 void Lora::sendData(const String& command, int timeout) {
     Serial.print("Sending: ");
-  Serial.println(command);
+    Serial.println(command);
   
-  // Clear buffer
-  while(SerialL.available()) SerialL.read();
+    // Clear buffer
+    while(SerialL.available()) SerialL.read();
   
-  // Send Command
-  SerialL.println(command);
+    // Send Command
+    SerialL.println(command);
 
-  // Wait for response
-  long int time = millis();
-  while( (time + timeout) > millis()) {
-    while(SerialL.available()) {
-      char c = SerialL.read();
-      Serial.write(c);
+    // Wait for response
+    unsigned long start = millis();
+    while (millis() - start < (unsigned long)timeout) {
+        while (SerialL.available()) {
+            char c = SerialL.read();
+            Serial.write(c);
+        }
+        delay(1); // Feed the watchdog
     }
-  }
-  Serial.println("\n-----------------------");
+    Serial.println("\n-----------------------");
 }

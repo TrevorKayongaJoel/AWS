@@ -9,7 +9,7 @@ public:
     void setupGSM();
     void connectGPRS(); // New: Setup Internet
     // Sends data to a specific ThingSpeak URL
-    void sendThingSpeakRequest(String url); 
+    bool sendThingSpeakRequest(String url); 
 
 private:
     void sendCommand(const String& command, int timeout, boolean debug);

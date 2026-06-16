@@ -16,6 +16,7 @@ public:
 private:
     RTC_DS3231 rtc;
     std::string date_time_;
+    bool rtcFound;
 };
 
 #endif

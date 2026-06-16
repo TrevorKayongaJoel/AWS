@@ -16,4 +16,5 @@ private:
     float temperature_;  
     float humidity_;  
     float altitude_;
+    bool initialized_;
 };

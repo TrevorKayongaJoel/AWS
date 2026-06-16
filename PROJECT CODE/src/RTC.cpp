@@ -5,18 +5,18 @@
 
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
-Rtc::Rtc() : date_time_("") {}
+Rtc::Rtc() : date_time_(""), rtcFound(false) {}
 
 void Rtc::setupRTC() {
-    Wire.begin();
     if (!rtc.begin()) {
         Serial.println("Couldn't find RTC");
-        //while (1); // Stop if RTC is missing
+        rtcFound = false;
+    } else {
+        rtcFound = true;
     }
 
-    if (rtc.lostPower()) {
+    if (rtcFound && rtc.lostPower()) {
         Serial.println("RTC lost power, let's set the time!");
-        // Only sets to compile time if the RTC completely stopped
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
 }
@@ -60,6 +60,9 @@ void Rtc::printDateTime() {
 }
 
 std::string Rtc::getDateTime() {
+    if (!rtcFound) {
+        return "2000-01-01 00:00:00";
+    }
     DateTime now = rtc.now();
     
     char buf[100];
@@ -72,4 +75,3 @@ std::string Rtc::getDateTime() {
     date_time_ = std::string(buf);
     return date_time_;
 }
-

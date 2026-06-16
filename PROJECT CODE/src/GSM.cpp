@@ -21,14 +21,6 @@ void GSM::setupGSM() {
         delay(500);
         if (SerialG.available()) {
             String response = SerialG.readString();
-            // Log the response to SD for later analysis
-            if (SD.begin()) {
-                File f = SD.open("/gsm_debug.txt", FILE_APPEND);
-                if (f) {
-                    f.print(String(millis())); f.print(",SETUP_AT_RESP,"); f.println(response);
-                    f.close();
-                }
-            }
             if (response.indexOf("OK") != -1) {
                 gsmReady = true;
                 Serial.println("GSM Ready.");
@@ -63,67 +55,81 @@ void GSM::connectGPRS() {
     sendCommand("AT+HTTPINIT", 1000, true);  
 }
 
-void GSM::sendThingSpeakRequest(String url) {
+bool GSM::sendThingSpeakRequest(String url) {
     // Terminate any stuck previous sessions just in case
     sendCommand("AT+HTTPTERM", 500, false);
     sendCommand("AT+HTTPINIT", 500, false);
 
     Serial.println("Uploading: " + url);
-    // Log the URL we are attempting to upload
-    if (SD.begin()) {
-        File f = SD.open("/gsm_debug.txt", FILE_APPEND);
-        if (f) {
-            f.print(String(millis())); f.print(",UPLOAD_URL,"); f.println(url);
-            f.close();
-        }
-    }
     
     // Set URL
     String cmd = "AT+HTTPPARA=\"URL\",\"" + url + "\"";
     sendCommand(cmd, 2000, false);
 
     // GET Request (Action 0)
-    // We wait longer (8000ms) because network can be slow
-    sendCommand("AT+HTTPACTION=0", 8000, true);
+    SerialG.println("AT+HTTPACTION=0");
+    
+    String actionResp = "";
+    unsigned long start = millis();
+    // Wait for BOTH "OK" (immediate) and then "+HTTPACTION:" (async)
+    bool seenOK = false;
+    bool seenAction = false;
+    
+    while (millis() - start < 15000) { // Increase timeout to 15s for slow GPRS
+        while (SerialG.available()) {
+            char c = SerialG.read();
+            actionResp += c;
+            Serial.write(c);
+        }
+        
+        if (actionResp.indexOf("OK") != -1) seenOK = true;
+        
+        // We need the code after HTTPACTION: 0,200,length
+        // So we wait until we see a newline after the action string
+        if (actionResp.indexOf("+HTTPACTION:") != -1) {
+            if (actionResp.endsWith("\n") || actionResp.endsWith("\r")) {
+                seenAction = true;
+                break;
+            }
+        }
+        delay(1); 
+    }
+    Serial.println();
 
-    // Read Response to see if it worked
+    bool success = false;
+    if (actionResp.indexOf(",200,") != -1) { // More specific check for 200 OK
+        success = true;
+        Serial.println("[GSM] Upload Success (200 OK)");
+    } else {
+        Serial.println("[GSM] Upload Failed or Timed Out");
+    }
+
+    // Read Response
     sendCommand("AT+HTTPREAD", 2000, true);
     
-    // Close this specific HTTP session to prevent memory leaks in modem
+    // Close session
     sendCommand("AT+HTTPTERM", 500, false); 
+
+    return success;
 }
 
 void GSM::sendCommand(const String& command, int timeout, boolean debug) {
     while(SerialG.available()) SerialG.read(); // Clear buffer
-    // Send command and capture response
     SerialG.println(command);
 
-    // Log the command to SD for debugging
-    if (SD.begin()) {
-        File f = SD.open("/gsm_debug.txt", FILE_APPEND);
-        if (f) {
-            f.print(String(millis())); f.print(",CMD,"); f.println(command);
-            f.close();
-        }
-    }
-
     String resp = "";
-    long int time = millis();
-    while((time + timeout) > millis()) {
-        while(SerialG.available()) {
+    unsigned long start = millis();
+    while (millis() - start < (unsigned long)timeout) {
+        while (SerialG.available()) {
             char c = SerialG.read();
             resp += c;
-            if(debug) Serial.write(c);
+            if (debug) Serial.write(c);
         }
-    }
-    if(debug) Serial.println();
-
-    // Persist response to SD for post-mortem
-    if (SD.begin()) {
-        File f = SD.open("/gsm_debug.txt", FILE_APPEND);
-        if (f) {
-            f.print(String(millis())); f.print(",RESP,"); f.println(resp);
-            f.close();
+        // Early exit if we see common terminators
+        if (resp.indexOf("OK") != -1 || resp.indexOf("ERROR") != -1) {
+            break; 
         }
+        delay(1); // Feed the watchdog
     }
+    if (debug) Serial.println();
 }
